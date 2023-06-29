@@ -1,0 +1,23 @@
+defmodule DomainEngine.Application do
+  use Application
+
+  def start(_type, _args) do
+    children = [
+      {Horde.Registry, [name: DomainEngine.DomainEngineRegistry, keys: :unique]},
+      {Horde.DynamicSupervisor, [name: DomainEngine.DomainEngineSupervisor, strategy: :one_for_one]}
+    ]
+    opts = [strategy: :one_for_one, name: DomainEngine.Supervisor]
+    Supervisor.start_link(children, opts)
+  end
+end
+# DomainEngine.Application.start(:type, :args)
+# Horde.DynamicSupervisor.start_child(DomainEngine.DomainEngineSupervisor, {DomainEngine.Aggregate, 1})
+# Horde.DynamicSupervisor.start_child(DomainEngine.DomainEngineSupervisor, {:via, :horde, {DomainEngine.Aggregate, 1}})
+
+# DomainEngine.DistributedSupervisor.start_child(DomainEngine.DomainEngineSupervisor, {DomainEngine.Aggregate, 1})
+# Horde.Supervisor.start_child(DomainEngine.DomainEngineSupervisor, {DomainEngine.Aggregate, 1})
+# GenServer.cast({:via, :horde, {DomainEngine.Aggregate, 2}}, {:command, 2})
+# GenServer.call({:via, :horde, {DomainEngine.Aggregate, 2}}, {:get})
+
+## CORRECT
+# Horde.DynamicSupervisor.start_child(DomainEngine.DomainEngineSupervisor, {DomainEngine.Aggregate, [id: "AAA", state: 1]})

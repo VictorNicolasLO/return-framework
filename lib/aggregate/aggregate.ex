@@ -1,14 +1,7 @@
-defmodule Benchmark do
-  def measure(function) do
-    function
-    |> :timer.tc
-    |> elem(0)
-    |> Kernel./(1_000_000)
-  end
-end
-
 defmodule DomainEngine.Aggregate do
+  alias DomainEngine.AggregateWritter
   use GenServer
+  import DomainEngine.Actor
   require Logger
 
   def child_spec(opts) do
@@ -16,6 +9,7 @@ defmodule DomainEngine.Aggregate do
     aggregate_name = Keyword.get(opts, :aggregate_name, __MODULE__)
     id = Keyword.get(opts, :id, __MODULE__)
     actor_id = gen_actor_id(subdomain, aggregate_name, id)
+
     %{
       id: "#{__MODULE__}_#{actor_id}",
       start: {__MODULE__, :start_link, [subdomain, aggregate_name, id, actor_id]},
@@ -25,30 +19,75 @@ defmodule DomainEngine.Aggregate do
   end
 
   def start_link(subdomain, aggregate_name, id, actor_id) do
-    IO.puts "Starting aggregate link " <> actor_id
-    GenServer.start_link(__MODULE__, {subdomain, aggregate_name, id, actor_id}, name: via_tuple(actor_id))
+    IO.puts("Starting aggregate link " <> actor_id)
+
+    GenServer.start_link(__MODULE__, {subdomain, aggregate_name, id, actor_id},
+      name: via_tuple(actor_id)
+    )
   end
 
-  def via_tuple(actor_id), do: {:via, Horde.Registry, {DomainEngine.DomainEngineRegistry, actor_id}}
-
-  def gen_actor_id(subdomain, aggregate_name, id), do: subdomain <> "-" <> aggregate_name <> "-" <> id
-
+  def gen_actor_id(subdomain, aggregate_name, id),
+    do: subdomain <> "-" <> aggregate_name <> "-" <> id
 
   def init({subdomain, aggregate_name, id, actor_id}) do
-    {:ok, %{subdomain: subdomain, aggregate_name: aggregate_name, id: id, state: nil, current_version: 0}}
+    {:ok,
+     %{
+       subdomain: subdomain,
+       aggregate_name: aggregate_name,
+       id: id,
+       state: nil,
+       current_version: 0,
+       actor_id: actor_id
+     }}
   end
 
-  def handle_cast({:command, newState}, %{id: id, state: _state}) do
-    IO.puts "HANDLE CAST"
-    {:ok, response} = Finch.build(:get, DomainEngine.Application.domain_gateway_url()) |> Finch.request(FinchClient)
-    IO.puts response.body
-    {:noreply, %{id: id, state: newState}}
+  def send_command({subdomain, aggregate_name, id}, command) do
+    cast_if_exists({subdomain, aggregate_name, id}, {:command, command})
+  end
+
+  def handle_cast({:command, _command}, state) do
+    IO.puts("HANDLE CAST")
+
+    {:ok, response} =
+      Finch.build(:get, DomainEngine.Application.domain_gateway_url())
+      |> Finch.request(FinchClient)
+
+    IO.puts(response.body)
+    {:ok, data} = JSON.decode(response.body)
+
+    AggregateWritter.enqueue_event({state.subdomain, state.aggregate_name, state.id}, data)
+    {:noreply, %{state | state: data.next_state}}
   end
 
   def handle_call({:get}, _from, state) do
-    {:reply, state,state}
+    {:reply, state, state}
   end
 
+  def cast_if_exists({subdomain, aggregate_name, id}, message) do
+    actor_id = gen_actor_id(subdomain, aggregate_name, id)
+    via = via_tuple(actor_id)
+
+    if exists?(actor_id) do
+      GenServer.cast(via, message)
+    else
+      Horde.DynamicSupervisor.start_child(
+        DomainEngine.DomainEngineSupervisor,
+        {DomainEngine.Aggregate, [id: id, subdomain: subdomain, aggregate_name: aggregate_name]}
+      )
+
+      GenServer.cast(via, message)
+    end
+  end
+end
+
+defmodule Benchmark do
+  @spec measure((-> any)) :: float
+  def measure(function) do
+    function
+    |> :timer.tc()
+    |> elem(0)
+    |> Kernel./(1_000_000)
+  end
 end
 
 # Horde.DynamicSupervisor.start_child(DomainEngine.DomainEngineSupervisor, {DomainEngine.Aggregate, [id: "123", subdomain: "auth", aggregate_name: "user"]})
@@ -58,8 +97,6 @@ end
 # children = [
 #   {DomainEngine.Aggregate, {1, 100}}
 # ]
-
-
 
 # children = [
 #   worker(Registry, :unique, :id)
@@ -73,10 +110,6 @@ end
 # Registry.lookup(:id, "asd2")
 # https://www.youtube.com/watch?v=VG8bBnOYj2g
 # https://hexdocs.pm/elixir/1.15.0/Registry.html
-
-
-
-
 
 # defmodule DomainEngine.SayHello do
 #   use GenServer
@@ -111,7 +144,6 @@ end
 
 #   def via_tuple(name), do: {:via, Horde.Registry, {DomainEngine.DomainEngineRegistry, name}}
 # end
-
 
 # receive do
 #   message ->
